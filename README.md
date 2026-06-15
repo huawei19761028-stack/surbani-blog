@@ -7,6 +7,12 @@
 - **모델:** `claude-sonnet-4-6`
 - **저장소:** https://github.com/huawei19761028-stack/surbani-blog
 
+## 화면
+
+![사용 화면](docs/screenshot.png)
+
+> 좌측 작업 이력 · 가운데 입력 폼 · 하단 생성 결과(제목·본문·태그).
+
 ## 클론
 
 ```bash
