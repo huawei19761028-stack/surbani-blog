@@ -85,8 +85,10 @@ npm run dev
 
 ```bash
 npm run build     # 타입체크 + 정적 빌드 → dist/
-npm run preview   # 빌드 결과 미리보기 (이 경우 server.js 는 별도 실행 필요)
+npm start         # node server.js — API + 빌드된 프론트를 한 서버에서 서빙 (http://localhost:3001)
 ```
+
+> 실제 배포는 아래 [배포](#배포) 섹션 참고.
 
 ## 사용법
 
@@ -97,6 +99,39 @@ npm run preview   # 빌드 결과 미리보기 (이 경우 server.js 는 별도 
 5. **전체 복사** 버튼으로 제목+본문+태그를 클립보드에 복사합니다.
 
 > 사진은 미리보기·생성 참고용으로만 쓰이며 **저장되지 않습니다.**
+
+## 배포
+
+운영 환경에서는 **서버 하나(`server.js`)가 API 프록시와 빌드된 프론트엔드를 함께 서빙**합니다.
+`dist/` 빌드 결과가 있으면 `server.js` 가 자동으로 정적 파일을 제공합니다.
+
+```bash
+npm install
+npm run build   # → dist/ 생성
+npm start       # node server.js — API + 프론트 동시 서빙 (기본 3001, PORT 환경변수 우선)
+```
+
+> 운영 서버는 `.env` 대신 **호스팅 플랫폼의 환경변수**에 `ANTHROPIC_API_KEY` 를 등록하세요.
+> 키는 절대 저장소에 커밋하지 않습니다.
+
+### Render / Railway / Fly.io (Node 호스트 — 권장)
+
+단일 Node 서비스로 가장 간단하게 배포됩니다.
+
+| 설정 | 값 |
+| --- | --- |
+| Build Command | `npm install && npm run build` |
+| Start Command | `npm start` |
+| 환경변수 | `ANTHROPIC_API_KEY` = 실제 키 |
+| 포트 | 플랫폼이 주입하는 `PORT` 를 자동 사용 (코드에서 `process.env.PORT` 처리됨) |
+
+배포 후 해당 도메인으로 접속하면 프론트가 뜨고, `/api/generate` 호출도 같은 서버에서 처리됩니다.
+
+### Vercel / Netlify (정적 + 서버리스)
+
+프론트는 정적으로 빌드(`dist/`)하고, `/api/generate` 는 서버리스 함수로 옮기는 방식도 가능합니다.
+이 경우 `server.js` 의 중계 로직을 `api/generate.js`(Vercel) 또는 Netlify Function 으로 이식하고,
+`ANTHROPIC_API_KEY` 를 해당 플랫폼 환경변수에 등록하면 됩니다.
 
 ## 트러블슈팅
 
