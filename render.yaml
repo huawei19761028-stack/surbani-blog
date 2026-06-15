@@ -1,0 +1,15 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# 대시보드에서 New ▸ Blueprint 로 이 저장소를 연결하면 아래 설정이 자동 적용됩니다.
+services:
+  - type: web
+    name: surbani-blog
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      # API 키는 저장소에 두지 않습니다. 대시보드에서 직접 입력하세요. (sync: false)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NODE_VERSION
+        value: "20"

@@ -4,6 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "써바니 칼갈이 및 미용가위 연마 블로그 글 생성 웹앱",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "concurrently -k -n server,client -c green,cyan \"npm:server\" \"npm:client\"",
     "server": "node server.js",
