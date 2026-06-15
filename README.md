@@ -100,4 +100,4 @@ npm run preview   # 빌드 결과 미리보기 (이 경우 server.js 는 별도 
 
 ## 라이선스
 
-이 프로젝트는 [MIT License](LICENSE) 를 따릅니다. © 2026 huawei19761028-stack
+이 프로젝트는 [MIT License](LICENSE) 를 따릅니다. © 2026 써바니
