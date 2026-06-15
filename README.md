@@ -97,3 +97,7 @@ npm run preview   # 빌드 결과 미리보기 (이 경우 server.js 는 별도 
 | `ANTHROPIC_API_KEY 가 설정되지 않았습니다` | `.env` 파일과 키를 확인하고 `npm run dev` 재실행 |
 | 401 / 인증 오류 | API 키가 유효한지, 결제(크레딧)가 활성화됐는지 확인 |
 | `/api/generate` 404 | 프록시 서버(3001)가 떴는지 확인 (`npm run dev` 가 둘 다 띄움) |
+
+## 라이선스
+
+이 프로젝트는 [MIT License](LICENSE) 를 따릅니다. © 2026 huawei19761028-stack
