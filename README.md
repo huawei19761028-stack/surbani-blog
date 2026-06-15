@@ -9,6 +9,12 @@
 - **모델:** `claude-sonnet-4-6`
 - **저장소:** https://github.com/huawei19761028-stack/surbani-blog
 
+## 데모
+
+![데모](docs/demo.gif)
+
+> 폼 입력 → 생성 → 제목·본문·태그 출력까지 (2배속).
+
 ## 화면
 
 ![사용 화면](docs/screenshot.png)
