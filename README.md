@@ -1,12 +1,18 @@
 # 써바니 블로그 글 생성기
 
 [![License](https://img.shields.io/github/license/huawei19761028-stack/surbani-blog)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-onrender.com-46d3aa)](https://surbani-blog.onrender.com)
 
 칼갈이 · 미용가위 연마 전문 업체 **써바니** 의 블로그 글을 Claude API 로 자동 생성하는 웹앱입니다.
+
+**▶ 라이브 데모: https://surbani-blog.onrender.com**
+
+> Render 무료 플랜은 15분 미사용 시 슬립 상태가 되어, 첫 접속이 30~50초 걸릴 수 있습니다(이후 빠름).
 
 - **프론트엔드:** Vite + React + TypeScript + Tailwind CSS
 - **백엔드:** Express 프록시 (API 키 보호 + CORS 우회)
 - **모델:** `claude-sonnet-4-6`
+- **배포:** [Render](https://render.com) — https://surbani-blog.onrender.com
 - **저장소:** https://github.com/huawei19761028-stack/surbani-blog
 
 ## 데모
