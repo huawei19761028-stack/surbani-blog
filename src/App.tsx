@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 // ── 타입 ─────────────────────────────────────────────
 interface Post {
@@ -26,7 +26,7 @@ interface FormState {
 
 interface PhotoPreview {
   id: string;
-  url: string; // objectURL — 저장하지 않음
+  dataUrl: string; // 리사이즈된 base64 JPEG — 미리보기 + 비전 분석 전송용 (저장 안 함)
   name: string;
 }
 
@@ -55,6 +55,45 @@ const LENGTHS = [
 // ── 유틸 ─────────────────────────────────────────────
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// 업로드 이미지를 비전 전송용으로 리사이즈(최대 1024px) + JPEG 압축
+function fileToResizedDataUrl(
+  file: File,
+  maxDim = 1024,
+  quality = 0.82
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > height && width > maxDim) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else if (height >= width && height > maxDim) {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        URL.revokeObjectURL(url);
+        reject(new Error("canvas 컨텍스트 생성 실패"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("이미지 로드 실패"));
+    };
+    img.src = url;
+  });
 }
 
 function loadHistory(): Post[] {
@@ -189,38 +228,36 @@ export default function App() {
   const [current, setCurrent] = useState<Post | null>(null);
   const [history, setHistory] = useState<Post[]>(() => loadHistory());
 
-  useEffect(() => {
-    return () => {
-      photos.forEach((p) => URL.revokeObjectURL(p.url));
-    };
-  }, [photos]);
-
+  // 사진만 있어도 생성 가능 (주제는 사진에서 자동 추론)
   const canGenerate = useMemo(
-    () => form.topic.trim().length > 0 && !loading,
-    [form.topic, loading]
+    () => (form.topic.trim().length > 0 || photos.length > 0) && !loading,
+    [form.topic, photos.length, loading]
   );
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
-  function onPhotos(e: React.ChangeEvent<HTMLInputElement>) {
+  async function onPhotos(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
-    const next = files.map((file) => ({
-      id: uid(),
-      url: URL.createObjectURL(file),
-      name: file.name,
-    }));
-    setPhotos((prev) => [...prev, ...next]);
     e.target.value = "";
+    setError(null);
+    try {
+      const next = await Promise.all(
+        files.map(async (file) => ({
+          id: uid(),
+          dataUrl: await fileToResizedDataUrl(file),
+          name: file.name,
+        }))
+      );
+      setPhotos((prev) => [...prev, ...next]);
+    } catch {
+      setError("이미지 처리에 실패했습니다. 다른 사진으로 시도해 주세요.");
+    }
   }
 
   function removePhoto(id: string) {
-    setPhotos((prev) => {
-      const target = prev.find((p) => p.id === id);
-      if (target) URL.revokeObjectURL(target.url);
-      return prev.filter((p) => p.id !== id);
-    });
+    setPhotos((prev) => prev.filter((p) => p.id !== id));
   }
 
   async function generate() {
@@ -239,7 +276,7 @@ export default function App() {
       "4. 소제목: 각 섹션을 '■ 소제목' 형태의 한 줄로 구분(네이버 가독성↑). 마크다운 #/##/** 기호는 절대 쓰지 마세요. 본문은 네이버 에디터에 그대로 붙여넣을 plain text 입니다.",
       "5. 키워드: 타겟 키워드를 본문에 자연스럽게 3~6회 반복(억지·과다 반복 금지). 보조 키워드도 문맥에 녹이세요.",
       "6. 신뢰성: 구체적인 수치·작업 경력·실제 경험·주의사항·솔직한 한계를 포함. 허위·과장·미검증 효능 주장 금지.",
-      "7. 사진: 사진이 들어갈 위치를 본문 곳곳에 '[사진: 무엇을 보여줄지 설명]' 형태로 5~8개 표시하세요.",
+      "7. 사진: 첨부된 사진이 있으면 먼저 사진을 분석해 칼·가위의 종류와 상태(마모·날벌어짐·이 빠짐·녹·전후 차이 등)를 파악하고, 관찰한 내용을 본문에 구체적으로 녹이세요. 사진에서 확인되지 않는 사실은 지어내지 마세요. 본문 곳곳에 사진이 들어갈 위치를 '[사진: 설명]' 형태로 첨부 장수에 맞춰 표시하세요.",
       `8. 톤: ${form.tone}. 사람이 직접 쓴 듯 자연스럽게. AI 특유의 기계적 반복·뻔한 마무리 금지.`,
       "9. 해시태그: 지역명+서비스 조합을 포함해 12~20개.",
       "10. 의료·과장 표현, 광고 심의 위반 소지 표현은 피하고 정보+경험 중심으로 작성.",
@@ -249,15 +286,16 @@ export default function App() {
 
     const photoNote =
       photos.length > 0
-        ? `\n- 첨부 사진 ${photos.length}장: ${photos
-            .map((p) => p.name)
-            .join(", ")}`
+        ? `\n- 첨부 사진 ${photos.length}장을 분석해 작업 대상과 상태를 글에 반영하세요.` +
+          (form.topic.trim()
+            ? ""
+            : " 주제를 명시하지 않았으니 사진 내용을 바탕으로 적절한 주제를 정해 작성하세요.")
         : "";
 
     const userPrompt =
       `다음 조건으로 네이버 블로그용 글을 작성해 주세요.\n` +
       `- 서비스 종류: ${form.serviceType}\n` +
-      `- 글 주제/소재: ${form.topic}\n` +
+      (form.topic.trim() ? `- 글 주제/소재: ${form.topic}\n` : "") +
       (form.targetKeyword
         ? `- 핵심 타겟 키워드(상위노출 목표): ${form.targetKeyword}\n`
         : "") +
@@ -274,12 +312,27 @@ export default function App() {
       photoNote;
 
     try {
+      // 텍스트 + 첨부 사진(비전 분석용 image 블록)으로 메시지 구성
+      const content: Array<Record<string, unknown>> = [
+        { type: "text", text: userPrompt },
+      ];
+      for (const p of photos) {
+        content.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: "image/jpeg",
+            data: p.dataUrl.split(",")[1] ?? "",
+          },
+        });
+      }
+
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           system,
-          messages: [{ role: "user", content: userPrompt }],
+          messages: [{ role: "user", content }],
           tools: [BLOG_TOOL],
           tool_choice: { type: "tool", name: BLOG_TOOL.name },
         }),
@@ -448,7 +501,10 @@ export default function App() {
 
               <label className="text-sm sm:col-span-2">
                 <span className="mb-1 block font-medium text-slate-600">
-                  주제 / 소재 <span className="text-red-500">*</span>
+                  주제 / 소재{" "}
+                  <span className="text-xs font-normal text-slate-400">
+                    (사진을 첨부하면 비워도 됨 — 사진에서 자동 추론)
+                  </span>
                 </span>
                 <input
                   value={form.topic}
@@ -562,8 +618,8 @@ export default function App() {
               <div className="text-sm sm:col-span-2">
                 <span className="mb-1 block font-medium text-slate-600">
                   사진 첨부{" "}
-                  <span className="text-xs font-normal text-slate-400">
-                    (미리보기용 — 저장되지 않음)
+                  <span className="text-xs font-normal text-blue-500">
+                    (AI 가 사진을 분석해 글에 반영 — 사진은 저장 안 됨)
                   </span>
                 </span>
                 <input
@@ -578,7 +634,7 @@ export default function App() {
                     {photos.map((p) => (
                       <div key={p.id} className="relative">
                         <img
-                          src={p.url}
+                          src={p.dataUrl}
                           alt={p.name}
                           className="h-20 w-20 rounded-lg object-cover"
                         />

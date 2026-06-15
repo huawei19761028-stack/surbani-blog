@@ -14,7 +14,8 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-app.use(express.json({ limit: "10mb" }));
+// 첨부 사진(base64 image 블록)이 포함될 수 있어 넉넉히 설정
+app.use(express.json({ limit: "25mb" }));
 
 app.post("/api/generate", async (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
