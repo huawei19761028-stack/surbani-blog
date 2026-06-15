@@ -1,5 +1,7 @@
 # 써바니 블로그 글 생성기
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 칼갈이 · 미용가위 연마 전문 업체 **써바니** 의 블로그 글을 Claude API 로 자동 생성하는 웹앱입니다.
 
 - **프론트엔드:** Vite + React + TypeScript + Tailwind CSS
