@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 interface Post {
   id: string;
   title: string;
+  titleAlternatives: string[]; // 제목 후보 (A/B)
+  summary: string; // 검색 노출용 요약 (스니펫)
   body: string;
   tags: string[];
   createdAt: string; // ISO 문자열
@@ -12,9 +14,13 @@ interface Post {
 interface FormState {
   serviceType: string;
   topic: string;
+  targetKeyword: string; // 핵심 노출(타겟) 키워드
   region: string;
   tone: string;
-  keywords: string;
+  keywords: string; // 보조 키워드
+  businessInfo: string; // 상호·연락처·영업시간·경력 등 (신뢰/CTA)
+  experience: string; // 실제 사례·전후 비교 메모 (신뢰성)
+  length: string;
   extra: string;
 }
 
@@ -41,11 +47,14 @@ const TONES = [
   "후기·스토리텔링 형식",
 ];
 
+const LENGTHS = [
+  { label: "표준 (약 1,500자)", value: "1500" },
+  { label: "풍부 (약 2,500자)", value: "2500" },
+];
+
 // ── 유틸 ─────────────────────────────────────────────
 function uid(): string {
-  return (
-    Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-  );
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
 function loadHistory(): Post[] {
@@ -53,7 +62,19 @@ function loadHistory(): Post[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as Post[]) : [];
+    if (!Array.isArray(parsed)) return [];
+    // 구버전 글(필드 누락) 호환
+    return (parsed as Partial<Post>[]).map((p) => ({
+      id: p.id ?? uid(),
+      title: p.title ?? "제목 없음",
+      titleAlternatives: Array.isArray(p.titleAlternatives)
+        ? p.titleAlternatives
+        : [],
+      summary: p.summary ?? "",
+      body: p.body ?? "",
+      tags: Array.isArray(p.tags) ? p.tags : [],
+      createdAt: p.createdAt ?? new Date().toISOString(),
+    }));
   } catch {
     return [];
   }
@@ -74,57 +95,100 @@ function formatDate(iso: string): string {
   });
 }
 
-// 모델 응답 텍스트에서 JSON 블록을 안전하게 파싱
-function parseGenerated(text: string): {
-  title: string;
-  body: string;
-  tags: string[];
-} {
-  let jsonStr = text.trim();
+// 네이버 에디터에 그대로 붙여넣을 수 있도록 마크다운 잔재 제거
+function cleanBody(text: string): string {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "$1") // **볼드** → 볼드
+    .replace(/^#{1,6}\s+/gm, "") // # 제목 → 제목
+    .replace(/`([^`]*)`/g, "$1"); // `code` → code
+}
 
-  // ```json ... ``` 코드펜스 제거
+// 구조화 출력 결과 객체 → Post 필드로 정규화
+function normalize(obj: Record<string, unknown>): Omit<Post, "id" | "createdAt"> {
+  return {
+    title: String(obj.title ?? "제목 없음"),
+    titleAlternatives: Array.isArray(obj.titleAlternatives)
+      ? obj.titleAlternatives.map(String)
+      : [],
+    summary: String(obj.summary ?? ""),
+    body: cleanBody(String(obj.body ?? "")),
+    tags: Array.isArray(obj.tags) ? obj.tags.map(String) : [],
+  };
+}
+
+// 텍스트 응답(폴백)에서 JSON 블록을 안전하게 파싱
+function parseTextFallback(text: string): Omit<Post, "id" | "createdAt"> {
+  let jsonStr = text.trim();
   const fence = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) jsonStr = fence[1].trim();
-
-  // 첫 { 부터 마지막 } 까지 추출 시도
   const first = jsonStr.indexOf("{");
   const last = jsonStr.lastIndexOf("}");
-  if (first !== -1 && last !== -1) {
-    jsonStr = jsonStr.slice(first, last + 1);
-  }
-
+  if (first !== -1 && last !== -1) jsonStr = jsonStr.slice(first, last + 1);
   try {
-    const obj = JSON.parse(jsonStr);
-    return {
-      title: String(obj.title ?? "제목 없음"),
-      body: String(obj.body ?? text),
-      tags: Array.isArray(obj.tags) ? obj.tags.map(String) : [],
-    };
+    return normalize(JSON.parse(jsonStr));
   } catch {
-    // 파싱 실패 시 원문을 본문으로 사용
-    return { title: "생성된 글", body: text, tags: [] };
+    return {
+      title: "생성된 글",
+      titleAlternatives: [],
+      summary: "",
+      body: text,
+      tags: [],
+    };
   }
 }
+
+// 글 작성 결과 스키마 (Anthropic tool use — API 가 이 형태의 JSON 을 보장)
+const BLOG_TOOL = {
+  name: "write_blog_post",
+  description: "네이버 블로그용 글을 구조화된 형식으로 작성합니다.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: { type: "string", description: "메인 제목 (25~40자, 키워드+지역 앞배치)" },
+      titleAlternatives: {
+        type: "array",
+        items: { type: "string" },
+        description: "제목 후보 2개",
+      },
+      summary: { type: "string", description: "검색 노출용 2~3문장 요약(메타 설명)" },
+      body: {
+        type: "string",
+        description:
+          "본문. 문단은 \\n\\n, 소제목은 '■ ', 사진 위치는 '[사진: 설명]'. 마크다운 기호 금지.",
+      },
+      tags: {
+        type: "array",
+        items: { type: "string" },
+        description: "해시태그 12~20개 (지역+서비스 조합 포함, # 없이)",
+      },
+    },
+    required: ["title", "summary", "body", "tags"],
+  },
+} as const;
 
 // ── 컴포넌트 ─────────────────────────────────────────
 export default function App() {
   const [form, setForm] = useState<FormState>({
     serviceType: SERVICE_TYPES[0],
     topic: "",
+    targetKeyword: "",
     region: "",
-    tone: TONES[0],
+    tone: TONES[1],
     keywords: "",
+    businessInfo: "",
+    experience: "",
+    length: LENGTHS[0].value,
     extra: "",
   });
 
   const [photos, setPhotos] = useState<PhotoPreview[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const [current, setCurrent] = useState<Post | null>(null);
   const [history, setHistory] = useState<Post[]>(() => loadHistory());
 
-  // objectURL 정리
   useEffect(() => {
     return () => {
       photos.forEach((p) => URL.revokeObjectURL(p.url));
@@ -163,26 +227,49 @@ export default function App() {
     setLoading(true);
     setError(null);
 
-    const system =
-      "당신은 '써바니' 라는 칼갈이·미용가위 연마 전문 업체의 블로그 글을 작성하는 한국어 카피라이터입니다. " +
-      "네이버 블로그/SEO 에 적합하도록 자연스럽고 신뢰감 있게 작성하세요. " +
-      "반드시 아래 JSON 형식 하나만 출력하세요. 마크다운 코드펜스나 설명을 덧붙이지 마세요.\n" +
-      '{ "title": "글 제목", "body": "본문 (문단 구분은 \\n\\n 사용, 1000자 이상)", "tags": ["태그1", "태그2", ...] }';
+    // 네이버 블로그 상위노출(C-Rank/DIA) + 신뢰(E-E-A-T) 지향 시스템 프롬프트
+    const system = [
+      "당신은 네이버 블로그 상위노출에 정통한 '써바니'(칼갈이·미용가위 연마 전문 업체)의 블로그 전문 작성자입니다.",
+      "신뢰성(경험·전문성·정직함)과 네이버 검색 노출(C-Rank·DIA)을 동시에 만족하는 한국어 글을 작성합니다.",
+      "",
+      "[작성 원칙]",
+      "1. 제목: 핵심 타겟 키워드와 지역명을 앞쪽에 자연스럽게 포함. 25~40자. 과장·낚시성 표현 금지. 검색자가 실제로 칠 법한 표현 사용.",
+      `2. 분량: 본문 약 ${form.length}자 이상. 정보량이 충분해야 합니다.`,
+      "3. 구조(순서대로): ① 공감되는 도입(후킹) ② 문제/원인 설명 ③ 해결책=서비스 소개 ④ 작업 과정·방법 ⑤ 실제 사례·전후(before/after) 비교로 신뢰 부여 ⑥ 자주 묻는 질문(FAQ 3개 내외) ⑦ 마무리 + 연락/예약 안내(CTA).",
+      "4. 소제목: 각 섹션을 '■ 소제목' 형태의 한 줄로 구분(네이버 가독성↑). 마크다운 #/##/** 기호는 절대 쓰지 마세요. 본문은 네이버 에디터에 그대로 붙여넣을 plain text 입니다.",
+      "5. 키워드: 타겟 키워드를 본문에 자연스럽게 3~6회 반복(억지·과다 반복 금지). 보조 키워드도 문맥에 녹이세요.",
+      "6. 신뢰성: 구체적인 수치·작업 경력·실제 경험·주의사항·솔직한 한계를 포함. 허위·과장·미검증 효능 주장 금지.",
+      "7. 사진: 사진이 들어갈 위치를 본문 곳곳에 '[사진: 무엇을 보여줄지 설명]' 형태로 5~8개 표시하세요.",
+      `8. 톤: ${form.tone}. 사람이 직접 쓴 듯 자연스럽게. AI 특유의 기계적 반복·뻔한 마무리 금지.`,
+      "9. 해시태그: 지역명+서비스 조합을 포함해 12~20개.",
+      "10. 의료·과장 표현, 광고 심의 위반 소지 표현은 피하고 정보+경험 중심으로 작성.",
+      "",
+      "결과는 반드시 write_blog_post 도구를 호출해 전달하세요.",
+    ].join("\n");
 
     const photoNote =
       photos.length > 0
         ? `\n- 첨부 사진 ${photos.length}장: ${photos
             .map((p) => p.name)
-            .join(", ")} (본문 중간에 사진이 들어갈 위치를 [사진] 표시로 안내해 주세요)`
+            .join(", ")}`
         : "";
 
     const userPrompt =
-      `다음 조건으로 블로그 글을 작성해 주세요.\n` +
+      `다음 조건으로 네이버 블로그용 글을 작성해 주세요.\n` +
       `- 서비스 종류: ${form.serviceType}\n` +
-      `- 주제/소재: ${form.topic}\n` +
+      `- 글 주제/소재: ${form.topic}\n` +
+      (form.targetKeyword
+        ? `- 핵심 타겟 키워드(상위노출 목표): ${form.targetKeyword}\n`
+        : "") +
       (form.region ? `- 지역(로컬 SEO): ${form.region}\n` : "") +
       `- 글의 톤: ${form.tone}\n` +
-      (form.keywords ? `- 포함할 키워드: ${form.keywords}\n` : "") +
+      (form.keywords ? `- 보조 키워드: ${form.keywords}\n` : "") +
+      (form.businessInfo
+        ? `- 업체 정보(상호·연락처·영업시간·경력 등, CTA·신뢰에 활용): ${form.businessInfo}\n`
+        : "") +
+      (form.experience
+        ? `- 실제 사례·경험·전후 비교 메모(신뢰성 강화에 활용): ${form.experience}\n`
+        : "") +
       (form.extra ? `- 추가 요청사항: ${form.extra}\n` : "") +
       photoNote;
 
@@ -193,6 +280,8 @@ export default function App() {
         body: JSON.stringify({
           system,
           messages: [{ role: "user", content: userPrompt }],
+          tools: [BLOG_TOOL],
+          tool_choice: { type: "tool", name: BLOG_TOOL.name },
         }),
       });
 
@@ -203,18 +292,27 @@ export default function App() {
         );
       }
 
-      const text: string =
-        data?.content?.[0]?.text ??
-        (typeof data?.content === "string" ? data.content : "");
-      if (!text) throw new Error("응답에서 본문을 찾을 수 없습니다.");
-
-      const parsed = parseGenerated(text);
+      // 구조화 출력: tool_use 블록의 input 이 검증된 JSON 객체
+      const blocks: Array<Record<string, unknown>> = Array.isArray(
+        data?.content
+      )
+        ? data.content
+        : [];
+      const toolBlock = blocks.find((b) => b.type === "tool_use");
+      let parsed: Omit<Post, "id" | "createdAt">;
+      if (toolBlock?.input) {
+        parsed = normalize(toolBlock.input as Record<string, unknown>);
+      } else {
+        // 폴백: 텍스트 응답
+        const textBlock = blocks.find((b) => b.type === "text");
+        const text = String(textBlock?.text ?? "");
+        if (!text) throw new Error("응답에서 본문을 찾을 수 없습니다.");
+        parsed = parseTextFallback(text);
+      }
       const post: Post = {
         id: uid(),
-        title: parsed.title,
-        body: parsed.body,
-        tags: parsed.tags,
         createdAt: new Date().toISOString(),
+        ...parsed,
       };
 
       setCurrent(post);
@@ -246,18 +344,21 @@ export default function App() {
       .map((t) => "#" + t)
       .join(" ")}`;
     navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
   }
+
+  const charCount = current ? current.body.replace(/\s/g, "").length : 0;
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800">
-      {/* 헤더 */}
       <header className="bg-slate-900 text-white">
         <div className="mx-auto max-w-7xl px-6 py-5">
           <h1 className="text-xl font-bold tracking-tight">
             🔪 써바니 블로그 글 생성기
           </h1>
           <p className="text-sm text-slate-300">
-            칼갈이 · 미용가위 연마 전문 — 블로그 포스트 자동 작성
+            칼갈이 · 미용가위 연마 전문 — 네이버 노출·신뢰 최적화 블로그 글 작성
           </p>
         </div>
       </header>
@@ -310,7 +411,6 @@ export default function App() {
 
         {/* ── 우측: 폼 + 결과 ── */}
         <main className="space-y-6">
-          {/* 입력 폼 */}
           <section className="rounded-xl bg-white p-6 shadow-sm">
             <h2 className="mb-4 text-base font-semibold text-slate-800">
               글 정보 입력
@@ -360,25 +460,88 @@ export default function App() {
 
               <label className="text-sm">
                 <span className="mb-1 block font-medium text-slate-600">
-                  지역 (로컬 SEO)
+                  핵심 타겟 키워드{" "}
+                  <span className="text-xs font-normal text-blue-500">
+                    (상위노출 목표)
+                  </span>
                 </span>
                 <input
-                  value={form.region}
-                  onChange={(e) => update("region", e.target.value)}
-                  placeholder="예) 서울 강서구"
+                  value={form.targetKeyword}
+                  onChange={(e) => update("targetKeyword", e.target.value)}
+                  placeholder="예) 인천 미용가위 연마"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
                 />
               </label>
 
               <label className="text-sm">
                 <span className="mb-1 block font-medium text-slate-600">
-                  포함할 키워드
+                  지역 (로컬 SEO)
+                </span>
+                <input
+                  value={form.region}
+                  onChange={(e) => update("region", e.target.value)}
+                  placeholder="예) 인천 부평구"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="text-sm">
+                <span className="mb-1 block font-medium text-slate-600">
+                  보조 키워드
                 </span>
                 <input
                   value={form.keywords}
                   onChange={(e) => update("keywords", e.target.value)}
-                  placeholder="쉼표로 구분 (예: 가위연마, 칼갈이, 출장)"
+                  placeholder="쉼표 구분 (예: 가위연마, 칼갈이, 방문)"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="text-sm">
+                <span className="mb-1 block font-medium text-slate-600">
+                  분량
+                </span>
+                <select
+                  value={form.length}
+                  onChange={(e) => update("length", e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
+                >
+                  {LENGTHS.map((l) => (
+                    <option key={l.value} value={l.value}>
+                      {l.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm sm:col-span-2">
+                <span className="mb-1 block font-medium text-slate-600">
+                  업체 정보{" "}
+                  <span className="text-xs font-normal text-slate-400">
+                    (상호·연락처·영업시간·경력 → 신뢰·CTA 에 활용)
+                  </span>
+                </span>
+                <input
+                  value={form.businessInfo}
+                  onChange={(e) => update("businessInfo", e.target.value)}
+                  placeholder="예) 써바니 / 카톡 @surbani / 평일 9-18시 / 경력 15년 / 방문·택배 가능"
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="text-sm sm:col-span-2">
+                <span className="mb-1 block font-medium text-slate-600">
+                  실제 사례 / 경험 메모{" "}
+                  <span className="text-xs font-normal text-slate-400">
+                    (전후 비교·후기 → 신뢰성 강화)
+                  </span>
+                </span>
+                <textarea
+                  value={form.experience}
+                  onChange={(e) => update("experience", e.target.value)}
+                  rows={2}
+                  placeholder="예) 10년 쓴 미용가위, 날 벌어짐·끊김 → 연마 후 깔끔하게 잘림. 미용실 원장님 재방문 후기 등"
+                  className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
                 />
               </label>
 
@@ -389,7 +552,7 @@ export default function App() {
                 <textarea
                   value={form.extra}
                   onChange={(e) => update("extra", e.target.value)}
-                  rows={3}
+                  rows={2}
                   placeholder="예) 마지막에 카카오톡 상담 안내를 넣어주세요"
                   className="w-full resize-y rounded-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-400"
                 />
@@ -438,11 +601,9 @@ export default function App() {
                 disabled={!canGenerate}
                 className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
               >
-                {loading ? "생성 중…" : "블로그 글 생성"}
+                {loading ? "생성 중… (20~40초)" : "네이버 블로그 글 생성"}
               </button>
-              {error && (
-                <span className="text-sm text-red-600">⚠ {error}</span>
-              )}
+              {error && <span className="text-sm text-red-600">⚠ {error}</span>}
             </div>
           </section>
 
@@ -450,21 +611,45 @@ export default function App() {
           {current && (
             <section className="rounded-xl bg-white p-6 shadow-sm">
               <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
+                <div className="min-w-0">
                   <h2 className="text-lg font-bold text-slate-900">
                     {current.title}
                   </h2>
                   <p className="mt-1 text-xs text-slate-400">
-                    {formatDate(current.createdAt)}
+                    {formatDate(current.createdAt)} · 본문 {charCount}자
                   </p>
                 </div>
                 <button
                   onClick={copyBody}
                   className="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
                 >
-                  전체 복사
+                  {copied ? "복사됨 ✓" : "전체 복사"}
                 </button>
               </div>
+
+              {/* 제목 후보 */}
+              {current.titleAlternatives.length > 0 && (
+                <div className="mb-3 rounded-lg bg-amber-50 p-3 text-sm">
+                  <span className="font-medium text-amber-700">
+                    제목 후보(A/B)
+                  </span>
+                  <ul className="mt-1 list-disc pl-5 text-slate-600">
+                    {current.titleAlternatives.map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* 검색 노출용 요약 */}
+              {current.summary && (
+                <div className="mb-4 rounded-lg bg-blue-50 p-3 text-sm">
+                  <span className="font-medium text-blue-700">
+                    검색 노출 요약(메타)
+                  </span>
+                  <p className="mt-1 text-slate-600">{current.summary}</p>
+                </div>
+              )}
 
               <article className="whitespace-pre-wrap text-[15px] leading-relaxed text-slate-700">
                 {current.body}

@@ -24,12 +24,23 @@ app.post("/api/generate", async (req, res) => {
       .json({ error: ".env 의 ANTHROPIC_API_KEY 가 설정되지 않았습니다." });
   }
 
-  const { system, messages } = req.body ?? {};
+  const { system, messages, tools, tool_choice } = req.body ?? {};
   if (!messages) {
     return res.status(400).json({ error: "messages 가 필요합니다." });
   }
 
   try {
+    const payload = {
+      model: "claude-sonnet-4-6",
+      // SEO 장문(1,500~2,500자 + 제목후보·요약·태그) 출력을 위해 넉넉히 설정
+      max_tokens: 8000,
+      system,
+      messages,
+    };
+    // 구조화 출력(tool use)을 쓰면 API 가 JSON 스키마를 보장한다 → 파싱 깨짐 방지
+    if (tools) payload.tools = tools;
+    if (tool_choice) payload.tool_choice = tool_choice;
+
     const upstream = await fetch(ANTHROPIC_URL, {
       method: "POST",
       headers: {
@@ -37,12 +48,7 @@ app.post("/api/generate", async (req, res) => {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-6",
-        max_tokens: 4000,
-        system,
-        messages,
-      }),
+      body: JSON.stringify(payload),
     });
 
     const data = await upstream.json();
