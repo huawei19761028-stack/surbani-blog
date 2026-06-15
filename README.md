@@ -5,6 +5,14 @@
 - **프론트엔드:** Vite + React + TypeScript + Tailwind CSS
 - **백엔드:** Express 프록시 (API 키 보호 + CORS 우회)
 - **모델:** `claude-sonnet-4-6`
+- **저장소:** https://github.com/huawei19761028-stack/surbani-blog
+
+## 클론
+
+```bash
+git clone https://github.com/huawei19761028-stack/surbani-blog.git
+cd surbani-blog
+```
 
 ## 구조
 
